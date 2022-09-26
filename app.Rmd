@@ -1,0 +1,422 @@
+---
+title: "Sample Summary Report - Capital Budgeting"
+author: "K P Joseph"
+date: '`r Sys.Date()`'
+output: html_document
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(shiny)
+library(htmltools)
+library(purrr)
+library(leaflet)
+library(highcharter)
+library(zoo)
+library(DT)
+library(sf)
+library(tigris)
+library(stringr)
+library(xml2)
+library(shinyWidgets)
+library(FinancialMath)
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE,message = FALSE)
+```
+
+## Project Selection - Introduction
+
+Firms do not often have unlimited resources to fund all the projects in their portfolio. In Capital Budgeting, firms can use the NPV rule to select the projects to include in their current budget. Any project with negative NPV is removed from the budget. 
+
+This is a sample project selection process created in R.
+
+Please download the Rmarkdown file [from this link]()
+
+#### Key Assumptions
+1. Production profile assumes 10% annualized decline	
+
+```{r }
+url_prod   <- "https://raw.githubusercontent.com/peekpetAnalystJourney/peekpetAnalystJourney/main/Production.csv"
+
+raw_prod   <- readr::read_csv(url_prod)
+raw_prod %>% 
+  pivot_longer(-Year, names_to = "series",values_to = "value") %>% 
+  ggplot(aes(x=Year,y=value,fill=series))+geom_area()+
+  labs(title = "Annual Oil Production Volume bbl",y="oil volume bbl")
+
+raw_prod %>% 
+  pivot_longer(-Year, names_to = "series",values_to = "value") %>% 
+  group_by(series) %>% 
+  summarise("Reserve MMbbl"=sum(value)/1e6) %>% 
+  knitr::kable(caption = "Project Reserve",digits=2)
+```
+
+2. WCS price is derived from WTI future price ([source](https://www.oilcrudeprice.com/wti-oil-price-future/)) and a constant WCS differential of USD18/bbl. Price only available till 2031, set as fixed value till 2039.
+
+Canadian Crudes are mostly sold at Western Canadian Select (WCS) crude oil price.
+
+0.5 and 1.5 multiplier used to generate low and high price forecast respectively.
+
+```{r comment=FALSE,warning=FALSE}
+wcs_diff = 18
+url_price <- "https://www.oilcrudeprice.com/wti-oil-price-future/"
+
+price <- xml2::read_html(url_price)
+price <- price %>% rvest::html_nodes(css="table.tables") %>% rvest::html_table()
+
+
+# binding columns together
+df <- do.call(rbind, price)
+
+price <- as.data.frame(df) %>% 
+  dplyr::select(Contract,Last) %>% 
+  tidyr::separate(Contract,into=c("month","Year")) %>% 
+    dplyr::select(Year,Last) %>% 
+    dplyr::rename(Base_Price = Last) %>%
+  dplyr::mutate(Base_Price = Base_Price - wcs_diff)%>% 
+  dplyr::mutate(Low_Price = Base_Price*0.5,High_Price = Base_Price*1.5) %>% 
+  dplyr::filter(Year>2022&Year<2032) %>% 
+  group_by(Year) %>% 
+  summarise(Base_Price=mean(Base_Price),Low_Price=mean(Low_Price),High_Price=mean(High_Price)) 
+
+fixed_base = 39
+fixed_high = 39*1.5
+fixed_low = 39*0.5
+
+  price <- rbind(price,c(2032,fixed_base,fixed_low,fixed_high))
+  price <- rbind(price,c(2033,fixed_base,fixed_low,fixed_high))
+  price <- rbind(price,c(2034,fixed_base,fixed_low,fixed_high))
+  price <- rbind(price,c(2035,fixed_base,fixed_low,fixed_high))
+  price <- rbind(price,c(2036,fixed_base,fixed_low,fixed_high))
+  price <- rbind(price,c(2037,fixed_base,fixed_low,fixed_high))
+  price <- rbind(price,c(2038,fixed_base,fixed_low,fixed_high))
+  price <- rbind(price,c(2039,fixed_base,fixed_low,fixed_high))
+
+
+price %>% 
+  pivot_longer(-Year,names_to = 'series',values_to = 'value') %>% 
+  ggplot(aes(Year,value,color=series))+geom_point() +
+  labs(title = "Range of Oil Price Assumed",y="WCS Oil Price US$/bbl")
+```
+
+
+						
+3. Average Opex per barrel for Canadian operator from [Source](https://knoema.com/rqaebad/cost-of-producing-a-barrel-of-crude-oil-by-country)
+
+
+4. Fx via Web scrapping from [xe.com](https://www.xe.com/currencyconverter/convert/?Amount=1&From=USD&To=CAD)
+
+```{r}
+fx_url = "https://www.xe.com/currencyconverter/convert/?Amount=1&From=USD&To=CAD"
+css_pth = "#__next > div:nth-child(2) > div.fluid-container__BaseFluidContainer-qoidzu-0.gJBOzk > section > div:nth-child(2) > div > main > form > div:nth-child(2) > div.result__Repulsor-sc-1bsijpp-4.dZGBTm > div:nth-child(1) > div.unit-rates___StyledDiv-sc-1dk593y-0.dEqdnx > p"
+fx <- rvest::read_html(fx_url)
+fx <- fx %>% rvest::html_element(css = css_pth) %>% rvest::html_text()
+fx <- str_split(fx," ",n=5,simplify = TRUE)[4]
+fx <- as.numeric(fx)
+```
+
+
+```{r}
+#Key assumption
+Tax_rate = 0.2
+disc_factor = 0.1
+opex_per_barrel = 23.3
+
+df1 <- tibble(Input=c("fx: CA $/US $",	
+"Average Opex per barrel (USD/bbl)",	
+"Tax Rate",	
+"Discount factor"),values =c(fx,opex_per_barrel,sprintf("%.0f%%",Tax_rate*100),sprintf("%.0f%%",disc_factor*100))) 
+df1 %>% 
+  knitr::kable(caption = "Basic Input Parameters",digits=3)
+```
+
+
+6. These projects are incremental projects for the mining and upgrading facility. Mining will continue after these projects ended. No mine financial deposit security required during the project life.			
+
+
+
+
+```{r}
+df2 <- tibble("Project"=names(raw_prod[2:5]),Cost=c(10000000,
+9640265,
+12180473,
+15187827)) 
+
+df2 %>% 
+  ggplot(aes(x=Project,y=Cost,fill=Project))+geom_col()+labs(title = "Assumed Upfront Project Cost",y="Project Cost, CA$")+
+  annotate("text",x="Project_1",y=df2$Cost[1]/2,angle=90, label=sprintf("CA$%.0f",df2$Cost[1]),color='white',size=7) +
+  annotate("text",x="Project_2",y=df2$Cost[2]/2,angle=90, label=sprintf("CA$%.0f",df2$Cost[2]),color='white',size=7) +
+  annotate("text",x="Project_3",y=df2$Cost[3]/2,angle=90, label=sprintf("CA$%.0f",df2$Cost[3]),color='white',size=7) +
+  annotate("text",x="Project_4",y=df2$Cost[4]/2,angle=90, label=sprintf("CA$%.0f",df2$Cost[4]),color='white',size=7)
+```
+
+### Results
+
+The results of the economics analysis is presented below and ranked using NPV.
+
+
+
+```{r base}
+
+df3 <- merge(raw_prod,price) %>% 
+  dplyr::mutate(Project1_Revenue=Project_1*Base_Price / fx,
+                Project2_Revenue=Project_2*Base_Price / fx,
+                Project3_Revenue=Project_3*Base_Price / fx,
+                Project4_Revenue=Project_4*Base_Price / fx,
+                Project1_Opex=Project_1*opex_per_barrel / fx,
+                Project2_Opex=Project_2*opex_per_barrel / fx,
+                Project3_Opex=Project_3*opex_per_barrel / fx,
+                Project4_Opex=Project_4*opex_per_barrel / fx,
+                Project1_Cashflow=(Project1_Revenue - Project1_Opex),
+                Project2_Cashflow=Project2_Revenue - Project2_Opex,
+                Project3_Cashflow=Project3_Revenue - Project3_Opex,
+                Project4_Cashflow=Project4_Revenue - Project4_Opex,
+                Project1_Cashflow_AT=Project1_Cashflow*(1-Tax_rate),
+                Project2_Cashflow_AT=Project2_Cashflow*(1-Tax_rate),
+                Project3_Cashflow_AT=Project3_Cashflow*(1-Tax_rate),
+                Project4_Cashflow_AT=Project4_Cashflow*(1-Tax_rate))
+
+df4 <- tibble(Category=c("NPV (CA$ million)","IRR","Productivity Index"), 
+       "Project 1"=c(FinancialMath::NPV(cf0=df2$Cost[1],cf=df3$Project1_Cashflow_AT,times=seq(1,length(df3$Year),1),i=disc_factor)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[1],cf=df3$Project1_Cashflow_AT,times=seq(1,length(df3$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[1],cf=df3$Project1_Cashflow_AT,times=seq(1,length(df3$Year),1),i=disc_factor)/df2$Cost[1]),
+       
+       "Project 2"=c(FinancialMath::NPV(cf0=df2$Cost[2],cf=df3$Project2_Cashflow_AT,times=seq(1,length(df3$Year),1),i=disc_factor)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[2],cf=df3$Project2_Cashflow_AT,times=seq(1,length(df3$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[2],cf=df3$Project2_Cashflow_AT,times=seq(1,length(df3$Year),1),i=disc_factor)/df2$Cost[2]),
+       
+       "Project 3"=c(FinancialMath::NPV(cf0=df2$Cost[3],cf=df3$Project3_Cashflow_AT,times=seq(1,length(df3$Year),1),i=disc_factor)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[3],cf=df3$Project3_Cashflow_AT,times=seq(1,length(df3$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[3],cf=df3$Project3_Cashflow_AT,times=seq(1,length(df3$Year),1),i=disc_factor)/df2$Cost[3]),
+       
+       "Project 4"=c(FinancialMath::NPV(cf0=df2$Cost[4],cf=df3$Project4_Cashflow_AT,times=seq(1,length(df3$Year),1),i=disc_factor)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[4],cf=df3$Project4_Cashflow_AT,times=seq(1,length(df3$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[4],cf=df3$Project4_Cashflow_AT,times=seq(1,length(df3$Year),1),i=disc_factor)/df2$Cost[4])
+      
+) 
+
+df4 %>% 
+  knitr::kable(caption = "Summary of Results",digits = 2,booktabs=TRUE,longtable = TRUE) %>% 
+  kableExtra::column_spec(4, color = 'white', background = 'green') %>% 
+  kableExtra::column_spec(5, color = 'white', background = 'red') %>% 
+  kableExtra::kable_styling("striped",full_width = TRUE)
+  
+
+```
+
+
+
+```{r low, include=FALSE}
+df3a <- merge(raw_prod,price) %>% 
+  dplyr::mutate(Project1_Revenue=Project_1*Low_Price / fx,
+                Project2_Revenue=Project_2*Low_Price / fx,
+                Project3_Revenue=Project_3*Low_Price / fx,
+                Project4_Revenue=Project_4*Low_Price / fx,
+                Project1_Opex=Project_1*opex_per_barrel / fx,
+                Project2_Opex=Project_2*opex_per_barrel / fx,
+                Project3_Opex=Project_3*opex_per_barrel / fx,
+                Project4_Opex=Project_4*opex_per_barrel / fx,
+                Project1_Cashflow=(Project1_Revenue - Project1_Opex),
+                Project2_Cashflow=Project2_Revenue - Project2_Opex,
+                Project3_Cashflow=Project3_Revenue - Project3_Opex,
+                Project4_Cashflow=Project4_Revenue - Project4_Opex,
+                Project1_Cashflow_AT=Project1_Cashflow*(1-Tax_rate),
+                Project2_Cashflow_AT=Project2_Cashflow*(1-Tax_rate),
+                Project3_Cashflow_AT=Project3_Cashflow*(1-Tax_rate),
+                Project4_Cashflow_AT=Project4_Cashflow*(1-Tax_rate))
+
+df4a <- tibble(Category=c("NPV (CA$ million)","IRR","Productivity Index"), 
+       "Project 1"=c(FinancialMath::NPV(cf0=df2$Cost[1],cf=df3a$Project1_Cashflow_AT,times=seq(1,length(df3a$Year),1),i=disc_factor)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[1],cf=df3a$Project1_Cashflow_AT,times=seq(1,length(df3a$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[1],cf=df3a$Project1_Cashflow_AT,times=seq(1,length(df3a$Year),1),i=disc_factor)/df2$Cost[1]),
+       
+       "Project 2"=c(FinancialMath::NPV(cf0=df2$Cost[2],cf=df3a$Project2_Cashflow_AT,times=seq(1,length(df3a$Year),1),i=disc_factor)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[2],cf=df3a$Project2_Cashflow_AT,times=seq(1,length(df3a$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[2],cf=df3a$Project2_Cashflow_AT,times=seq(1,length(df3a$Year),1),i=disc_factor)/df2$Cost[2]),
+       
+       "Project 3"=c(FinancialMath::NPV(cf0=df2$Cost[3],cf=df3a$Project3_Cashflow_AT,times=seq(1,length(df3a$Year),1),i=disc_factor)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[3],cf=df3a$Project3_Cashflow_AT,times=seq(1,length(df3a$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[3],cf=df3a$Project3_Cashflow_AT,times=seq(1,length(df3a$Year),1),i=disc_factor)/df2$Cost[3]),
+       
+       "Project 4"=c(FinancialMath::NPV(cf0=df2$Cost[4],cf=df3a$Project4_Cashflow_AT,times=seq(1,length(df3a$Year),1),i=disc_factor)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[4],cf=df3a$Project4_Cashflow_AT,times=seq(1,length(df3a$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[4],cf=df3a$Project4_Cashflow_AT,times=seq(1,length(df3a$Year),1),i=disc_factor)/df2$Cost[4])
+      
+) 
+```
+
+
+```{r high, include=FALSE}
+df3b <- merge(raw_prod,price) %>% 
+  dplyr::mutate(Project1_Revenue=Project_1*High_Price / fx,
+                Project2_Revenue=Project_2*High_Price / fx,
+                Project3_Revenue=Project_3*High_Price / fx,
+                Project4_Revenue=Project_4*High_Price / fx,
+                Project1_Opex=Project_1*opex_per_barrel / fx,
+                Project2_Opex=Project_2*opex_per_barrel / fx,
+                Project3_Opex=Project_3*opex_per_barrel / fx,
+                Project4_Opex=Project_4*opex_per_barrel / fx,
+                Project1_Cashflow=(Project1_Revenue - Project1_Opex),
+                Project2_Cashflow=Project2_Revenue - Project2_Opex,
+                Project3_Cashflow=Project3_Revenue - Project3_Opex,
+                Project4_Cashflow=Project4_Revenue - Project4_Opex,
+                Project1_Cashflow_AT=Project1_Cashflow*(1-Tax_rate),
+                Project2_Cashflow_AT=Project2_Cashflow*(1-Tax_rate),
+                Project3_Cashflow_AT=Project3_Cashflow*(1-Tax_rate),
+                Project4_Cashflow_AT=Project4_Cashflow*(1-Tax_rate))
+
+df4b <- tibble(Category=c("NPV (CA$ million)","IRR","Productivity Index"), 
+       "Project 1"=c(FinancialMath::NPV(cf0=df2$Cost[1],cf=df3b$Project1_Cashflow_AT,times=seq(1,length(df3b$Year),1),i=disc_factor)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[1],cf=df3b$Project1_Cashflow_AT,times=seq(1,length(df3b$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[1],cf=df3b$Project1_Cashflow_AT,times=seq(1,length(df3b$Year),1),i=disc_factor)/df2$Cost[1]),
+       
+       "Project 2"=c(FinancialMath::NPV(cf0=df2$Cost[2],cf=df3b$Project2_Cashflow_AT,times=seq(1,length(df3b$Year),1),i=disc_factor)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[2],cf=df3b$Project2_Cashflow_AT,times=seq(1,length(df3b$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[2],cf=df3b$Project2_Cashflow_AT,times=seq(1,length(df3b$Year),1),i=disc_factor)/df2$Cost[2]),
+       
+       "Project 3"=c(FinancialMath::NPV(cf0=df2$Cost[3],cf=df3b$Project3_Cashflow_AT,times=seq(1,length(df3b$Year),1),i=disc_factor)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[3],cf=df3b$Project3_Cashflow_AT,times=seq(1,length(df3b$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[3],cf=df3b$Project3_Cashflow_AT,times=seq(1,length(df3b$Year),1),i=disc_factor)/df2$Cost[3]),
+       
+       "Project 4"=c(FinancialMath::NPV(cf0=df2$Cost[4],cf=df3b$Project4_Cashflow_AT,times=seq(1,length(df3b$Year),1),i=disc_factor)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[4],cf=df3b$Project4_Cashflow_AT,times=seq(1,length(df3b$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[4],cf=df3b$Project4_Cashflow_AT,times=seq(1,length(df3b$Year),1),i=disc_factor)/df2$Cost[4])
+      
+) 
+```
+
+
+**Project 3** has the highest NPV and is therefore selected first. 
+
+**Project 4** has negative NPV and is therefore removed from the budget. 
+
+##### After-Tax Cashflow Plot per Project
+
+```{r reactive-inputs}
+
+df5 <- df3 %>% 
+dplyr:: select(Year,ends_with("Cashflow_AT"))
+
+
+# single selection
+
+  ui = fluidPage(
+    varSelectInput("variable", "Variable:", df5[2:5]),
+    plotOutput("data")
+    )
+
+  server = function(input, output) {
+    output$data <- renderPlot({
+      ggplot(df5, aes(factor(Year),!!input$variable,fill=factor(Year))) + layer(geom='col',stat = "identity", position = "identity",show.legend = FALSE) + labs(title="Project Cashflow After Tax, CA$")
+    })
+  }
+shinyApp(ui = ui, server = server)
+```
+
+
+
+### Sensitivity Results
+
+##### Economics results for Based Oil Price at different Discount Factor
+
+
+```{r}
+ui <- fluidPage(
+sliderInput(inputId = "Discf",
+label = "Base Oil Price Scenario: Choose a Discount Factor",
+value = 0.1, min = 0, max = 0.5),
+tableOutput("data")
+)
+server <- function(input, output) {
+  output$data <- renderTable({
+  tibble(Category=c("NPV (CA$ million)","IRR","Productivity Index"), 
+       "Project 1"=c(FinancialMath::NPV(cf0=df2$Cost[1],cf=df3$Project1_Cashflow_AT,times=seq(1,length(df3$Year),1),i=input$Discf)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[1],cf=df3$Project1_Cashflow_AT,times=seq(1,length(df3$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[1],cf=df3$Project1_Cashflow_AT,times=seq(1,length(df3$Year),1),i=input$Discf)/df2$Cost[1]),
+       
+       "Project 2"=c(FinancialMath::NPV(cf0=df2$Cost[2],cf=df3$Project2_Cashflow_AT,times=seq(1,length(df3$Year),1),i=input$Discf)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[2],cf=df3$Project2_Cashflow_AT,times=seq(1,length(df3$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[2],cf=df3$Project2_Cashflow_AT,times=seq(1,length(df3$Year),1),i=input$Discf)/df2$Cost[2]),
+       
+       "Project 3"=c(FinancialMath::NPV(cf0=df2$Cost[3],cf=df3$Project3_Cashflow_AT,times=seq(1,length(df3$Year),1),i=input$Discf)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[3],cf=df3$Project3_Cashflow_AT,times=seq(1,length(df3$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[3],cf=df3$Project3_Cashflow_AT,times=seq(1,length(df3$Year),1),i=input$Discf)/df2$Cost[3]),
+       
+       "Project 4"=c(FinancialMath::NPV(cf0=df2$Cost[4],cf=df3$Project4_Cashflow_AT,times=seq(1,length(df3$Year),1),i=input$Discf)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[4],cf=df3$Project4_Cashflow_AT,times=seq(1,length(df3$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[4],cf=df3$Project4_Cashflow_AT,times=seq(1,length(df3$Year),1),i=input$Discf)/df2$Cost[4]) 
+) 
+    })
+  }
+shinyApp(ui = ui, server = server)
+```
+
+
+##### Economics results at different Discount Factor and High Oil Price
+
+
+```{r}
+ui <- fluidPage(
+sliderInput(inputId = "Discf",
+label = "High Oil Price Scenario: Choose a Discount Factor",
+value = 0.1, min = 0, max = 0.5),
+tableOutput("data")
+)
+server <- function(input, output) {
+  output$data <- renderTable({
+  tibble(Category=c("NPV (CA$ million)","IRR","Productivity Index"), 
+       "Project 1"=c(FinancialMath::NPV(cf0=df2$Cost[1],cf=df3b$Project1_Cashflow_AT,times=seq(1,length(df3b$Year),1),i=input$Discf)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[1],cf=df3b$Project1_Cashflow_AT,times=seq(1,length(df3b$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[1],cf=df3b$Project1_Cashflow_AT,times=seq(1,length(df3b$Year),1),i=input$Discf)/df2$Cost[1]),
+       
+       "Project 2"=c(FinancialMath::NPV(cf0=df2$Cost[2],cf=df3b$Project2_Cashflow_AT,times=seq(1,length(df3b$Year),1),i=input$Discf)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[2],cf=df3b$Project2_Cashflow_AT,times=seq(1,length(df3b$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[2],cf=df3b$Project2_Cashflow_AT,times=seq(1,length(df3b$Year),1),i=input$Discf)/df2$Cost[2]),
+       
+       "Project 3"=c(FinancialMath::NPV(cf0=df2$Cost[3],cf=df3b$Project3_Cashflow_AT,times=seq(1,length(df3b$Year),1),i=input$Discf)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[3],cf=df3b$Project3_Cashflow_AT,times=seq(1,length(df3b$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[3],cf=df3b$Project3_Cashflow_AT,times=seq(1,length(df3b$Year),1),i=input$Discf)/df2$Cost[3]),
+       
+       "Project 4"=c(FinancialMath::NPV(cf0=df2$Cost[4],cf=df3b$Project4_Cashflow_AT,times=seq(1,length(df3b$Year),1),i=input$Discf)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[4],cf=df3b$Project4_Cashflow_AT,times=seq(1,length(df3b$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[4],cf=df3b$Project4_Cashflow_AT,times=seq(1,length(df3b$Year),1),i=input$Discf)/df2$Cost[4]) 
+) 
+    })
+  }
+shinyApp(ui = ui, server = server)
+```
+
+
+##### Economics results at different Discount Factor and Low Oil Price
+
+
+```{r}
+ui <- fluidPage(
+sliderInput(inputId = "Discf",
+label = "Low Oil Price Scenario: Choose a Discount Factor",
+value = 0.1, min = 0, max = 0.5),
+tableOutput("data")
+)
+server <- function(input, output) {
+  output$data <- renderTable({
+  tibble(Category=c("NPV (CA$ million)","IRR","Productivity Index"), 
+       "Project 1"=c(FinancialMath::NPV(cf0=df2$Cost[1],cf=df3a$Project1_Cashflow_AT,times=seq(1,length(df3a$Year),1),i=input$Discf)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[1],cf=df3a$Project1_Cashflow_AT,times=seq(1,length(df3a$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[1],cf=df3a$Project1_Cashflow_AT,times=seq(1,length(df3a$Year),1),i=input$Discf)/df2$Cost[1]),
+       
+       "Project 2"=c(FinancialMath::NPV(cf0=df2$Cost[2],cf=df3a$Project2_Cashflow_AT,times=seq(1,length(df3a$Year),1),i=input$Discf)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[2],cf=df3a$Project2_Cashflow_AT,times=seq(1,length(df3a$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[2],cf=df3a$Project2_Cashflow_AT,times=seq(1,length(df3a$Year),1),i=input$Discf)/df2$Cost[2]),
+       
+       "Project 3"=c(FinancialMath::NPV(cf0=df2$Cost[3],cf=df3a$Project3_Cashflow_AT,times=seq(1,length(df3a$Year),1),i=input$Discf)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[3],cf=df3a$Project3_Cashflow_AT,times=seq(1,length(df3a$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[3],cf=df3a$Project3_Cashflow_AT,times=seq(1,length(df3a$Year),1),i=input$Discf)/df2$Cost[3]),
+       
+       "Project 4"=c(FinancialMath::NPV(cf0=df2$Cost[4],cf=df3a$Project4_Cashflow_AT,times=seq(1,length(df3a$Year),1),i=input$Discf)/1e6,
+                     FinancialMath::IRR(cf0=df2$Cost[4],cf=df3a$Project4_Cashflow_AT,times=seq(1,length(df3a$Year),1))[2],
+                     1+FinancialMath::NPV(cf0=df2$Cost[4],cf=df3a$Project4_Cashflow_AT,times=seq(1,length(df3a$Year),1),i=input$Discf)/df2$Cost[4]) 
+) 
+    })
+  }
+shinyApp(ui = ui, server = server)
+```
