@@ -63,7 +63,7 @@ url_price <- "https://www.oilcrudeprice.com/wti-oil-price-future/"
 
 price <- xml2::read_html(url_price)
 price <- price %>% rvest::html_nodes(css="table.tables") %>% rvest::html_table()
-
+price
 
 # binding columns together
 df <- do.call(rbind, price)
@@ -72,16 +72,22 @@ price <- as.data.frame(df) %>%
   dplyr::select(Contract,Last) %>% 
   tidyr::separate(Contract,into=c("month","Year")) %>% 
     dplyr::select(Year,Last) %>% 
-    dplyr::rename(Base_Price1 = Last) %>%
-  dplyr::mutate(Base_Price2 = Base_Price1 - wcs_diff)%>% 
+    dplyr::rename(Base_Price1 = Last)
+price$Base_Price1 = as.numeric(price$Base_Price1) 
+  price <- price %>% 
+    dplyr::mutate(Base_Price2 = Base_Price1 - wcs_diff)%>% 
   dplyr::mutate(Low_Price2 = Base_Price2*0.5,High_Price2 = Base_Price2*1.5) %>% 
   dplyr::filter(Year>2022&Year<2032) %>% 
   dplyr::group_by(Year) %>% 
-  dplyr::summarise(Base_Price=mean(Base_Price2),Low_Price=mean(Low_Price2),High_Price=mean(High_Price2)) 
+  dplyr::summarise(
+    Base_Price = base::sum(Base_Price2) /12,
+    Low_Price = base::sum(Low_Price2) / 12,
+    High_Price = base::sum(High_Price2)/12
+  ) 
 
 fixed_base = price$Base_Price[9]
-fixed_high = 39*1.5
-fixed_low = 39*0.5
+fixed_high = price$Base_Price[9]*1.5
+fixed_low = price$Base_Price[9]*0.5
 
 temp <- tibble("Year"=seq(2032,2039,1),"Base_Price"=fixed_base,"Low_Price"=fixed_low,"High_Price"=fixed_high)
 
@@ -103,17 +109,17 @@ price %>%
 
 ```{r}
 fx_url = "https://www.xe.com/currencyconverter/convert/?Amount=1&From=USD&To=CAD"
-css_pth = "#__next > div:nth-child(2) > div.fluid-container__BaseFluidContainer-qoidzu-0.gJBOzk > section > div:nth-child(2) > div > main > form > div:nth-child(2) > div.result__Repulsor-sc-1bsijpp-4.dZGBTm > div:nth-child(1) > div.unit-rates___StyledDiv-sc-1dk593y-0.dEqdnx > p"
+css_pth = "#__next > div:nth-child(2) > div:nth-child(4) > section > div > div:nth-child(1) > div > div:nth-child(1) > table > tbody > tr:nth-child(1) > td:nth-child(2)"
 fx <- rvest::read_html(fx_url)
-fx <- fx %>% rvest::html_element(css = css_pth) %>% rvest::html_text()
-fx <- str_split(fx," ",n=5,simplify = TRUE)[4]
+fx <- fx %>% rvest::html_element(css = css_pth) %>% rvest::html_text2()
+fx <- str_split(fx," ",n=6,simplify = TRUE)[1]
 fx <- as.numeric(fx)
 ```
 
 
 ```{r}
 #Key assumption
-Tax_rate = 0.2
+Tax_rate = 0.1
 disc_factor = 0.1
 opex_per_barrel = 23.3
 
@@ -126,7 +132,7 @@ df1 %>%
 ```
 
 
-6. These projects are incremental projects for the mining and upgrading facility. Mining will continue after these projects ended. No mine financial deposit security required during the project life.			
+6. These projects are incremental projects for the mining facility. Mining will continue after these projects ended. No mine financial deposit security required during the project life.			
 
 
 
@@ -192,12 +198,10 @@ df4 <- tibble(Category=c("NPV (CA$ million)","IRR","Productivity Index"),
 
 df4 %>% 
   knitr::kable(caption = "Summary of Results",digits = 2,booktabs=TRUE,longtable = TRUE) %>% 
-  kableExtra::column_spec(4, color = 'white', background = 'green') %>% 
-  kableExtra::column_spec(5, color = 'white', background = 'red') %>% 
+  #kableExtra::column_spec(4, color = 'white', background = 'green') %>% 
+ # kableExtra::column_spec(5, color = 'white', background = 'red') %>% 
   kableExtra::kable_styling("striped",full_width = TRUE)
   
-head(df3) %>% 
-  knitr::kable()
 ```
 
 
@@ -246,9 +250,9 @@ df3b <- merge(raw_prod,price) %>%
 ```
 
 
-**Project 3** has the highest NPV and is therefore selected first. 
+**Project ** with the highest NPV and is therefore selected first. 
 
-**Project 4** has negative NPV and is therefore removed from the budget. 
+
 
 ##### After-Tax Cashflow Plot per Project
 
