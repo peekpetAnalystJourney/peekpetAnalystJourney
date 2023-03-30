@@ -63,7 +63,7 @@ url_price <- "https://www.oilcrudeprice.com/wti-oil-price-future/"
 
 price <- xml2::read_html(url_price)
 price <- price %>% rvest::html_nodes(css="table.tables") %>% rvest::html_table()
-price
+
 
 # binding columns together
 df <- do.call(rbind, price)
@@ -80,9 +80,9 @@ price$Base_Price1 = as.numeric(price$Base_Price1)
   dplyr::filter(Year>2022&Year<2032) %>% 
   dplyr::group_by(Year) %>% 
   dplyr::summarise(
-    Base_Price = base::sum(Base_Price2) /12,
-    Low_Price = base::sum(Low_Price2) / 12,
-    High_Price = base::sum(High_Price2)/12
+    Base_Price = base::mean(Base_Price2),
+    Low_Price = base::mean(Low_Price2),
+    High_Price = base::mean(High_Price2)
   ) 
 
 fixed_base = price$Base_Price[9]
@@ -138,10 +138,10 @@ df1 %>%
 
 
 ```{r}
-df2 <- tibble("Project"=names(raw_prod[2:5]),Cost=c(10000000,
-9640265,
-12180473,
-15187827)) 
+df2 <- tibble("Project"=names(raw_prod[2:5]),Cost=c(3000000,
+4640265,
+6180473,
+10187827)) 
 
 df2 %>% 
   ggplot(aes(x=Project,y=Cost,fill=Project))+geom_col()+labs(title = "Assumed Upfront Project Cost",y="Project Cost, CA$")+
@@ -153,7 +153,7 @@ df2 %>%
 
 ### Results
 
-The results of the economics analysis is presented below and ranked using NPV.
+The results of the economics analysis is presented below.
 
 
 
@@ -250,8 +250,8 @@ df3b <- merge(raw_prod,price) %>%
 ```
 
 
-**Project ** with the highest NPV and is therefore selected first. 
-
+**Project ** NPV must be positive if the NPV rule is being utilized. 
+**Project ** with the highest NPV is selected first. 
 
 
 ##### After-Tax Cashflow Plot per Project
