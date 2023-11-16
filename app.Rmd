@@ -108,12 +108,10 @@ price %>%
 4. Fx dynamically linked via Web scrapping from [xe.com](https://www.xe.com/currencyconverter/convert/?Amount=1&From=USD&To=CAD)
 
 ```{r}
-fx_url = "https://www.xe.com/currencyconverter/convert/?Amount=1&From=USD&To=CAD"
-css_pth = "#__next > div:nth-child(2) > div:nth-child(4) > section > div > div:nth-child(1) > div > div:nth-child(1) > table > tbody > tr:nth-child(1) > td:nth-child(2)"
-fx <- rvest::read_html(fx_url)
-fx <- fx %>% rvest::html_element(css = css_pth) %>% rvest::html_text2()
-fx <- str_split(fx," ",n=6,simplify = TRUE)[1]
-fx <- as.numeric(fx)
+library(quantmod)
+dff <- getQuote(paste0("CAD", "USD", "=X"))
+
+fx <- as.numeric(dff$Last[1])
 ```
 
 
